@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, nextTick } from "vue";
 import {
   chat as chatApi,
   generateImage,
@@ -26,8 +26,16 @@ const imageLoading = ref(false);
 const error = ref("");
 const textModel = ref("qwen-turbo");
 const imageModel = ref("qwen-image-plus");
-// 限定为 Qwen 文生图支持的尺寸
 const imageSize = ref("1328*1328");
+const messagesContainer = ref<HTMLElement | null>(null);
+const sidebarCollapsed = ref(false);
+
+const scrollToBottom = async () => {
+  await nextTick();
+  if (messagesContainer.value) {
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
+  }
+};
 
 const loadSessions = async () => {
   try {
@@ -46,6 +54,7 @@ const loadMessages = async () => {
   if (!currentSessionId.value) return;
   try {
     messages.value = await listMessages(currentSessionId.value);
+    scrollToBottom();
   } catch (err) {
     error.value = (err as Error).message;
   }
@@ -84,13 +93,12 @@ const sendMessage = async () => {
 };
 
 const submitChat = async () => {
-  if (!chatInput.value) return;
+  if (!chatInput.value.trim()) return;
   chatLoading.value = true;
   error.value = "";
   try {
     const res = await chatApi({
       prompt: chatInput.value,
-      session_id: currentSessionId.value || undefined,
       model: textModel.value,
     });
     if (res.session_id && res.session_id !== currentSessionId.value) {
@@ -109,7 +117,7 @@ const submitChat = async () => {
 };
 
 const submitImage = async () => {
-  if (!imageInput.value) return;
+  if (!imageInput.value.trim()) return;
   imageLoading.value = true;
   error.value = "";
   try {
@@ -162,460 +170,676 @@ const handleDelete = async (session: ChatSession) => {
   }
 };
 
+const handleKeydown = (e: KeyboardEvent) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+};
+
 onMounted(async () => {
   await loadSessions();
 });
 </script>
 
 <template>
-  <div class="layout">
-    <aside class="sidebar">
+  <div class="ai-container">
+    <!-- 左侧边栏 -->
+    <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header">
-        <div class="logo">Q</div>
-        <button class="pill" @click="newConversation('chat')">+ 新对话</button>
-        <button class="pill ghost" @click="newConversation('image')">+ 新图片</button>
+        <button class="new-chat-btn" @click="newConversation(mode)">
+          <span class="icon">+</span>
+          <span class="text">新对话</span>
+        </button>
+        <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed">
+          <span>{{ sidebarCollapsed ? '→' : '←' }}</span>
+        </button>
       </div>
-      <div class="session-list">
+
+      <div class="session-list" v-if="!sidebarCollapsed">
         <div
           v-for="s in sessions"
           :key="s.id"
-          :class="['session-item', currentSessionId === s.id && 'active']"
+          :class="['session-item', { active: currentSessionId === s.id }]"
           @click="switchSession(s)"
         >
-          <div class="title">{{ s.title || (s.mode === 'image' ? '图片' : '对话') }}</div>
-          <div class="meta">
-            {{ s.mode }} · {{ s.model || "默认" }}
-            <span v-if="s.is_pinned === 1" class="tag">置顶</span>
+          <span class="session-icon">{{ s.mode === 'image' ? '🎨' : '💬' }}</span>
+          <div class="session-info">
+            <span class="session-title">{{ s.title || (s.mode === 'image' ? '图片生成' : '新对话') }}</span>
           </div>
-          <div class="session-actions" @click.stop="">
-            <button class="dots" @click="sessionMenuOpen = sessionMenuOpen === s.id ? null : s.id">⋯</button>
-            <div v-if="sessionMenuOpen === s.id" class="menu">
-              <button @click="togglePin(s)">{{ s.is_pinned === 1 ? "取消置顶" : "置顶" }}</button>
-              <button class="danger" @click="handleDelete(s)">删除</button>
+          <div class="session-actions" @click.stop>
+            <button class="action-btn" @click="sessionMenuOpen = sessionMenuOpen === s.id ? null : s.id">⋯</button>
+            <div v-if="sessionMenuOpen === s.id" class="dropdown-menu">
+              <button @click="togglePin(s)">
+                {{ s.is_pinned === 1 ? '📌 取消置顶' : '📌 置顶' }}
+              </button>
+              <button class="danger" @click="handleDelete(s)">🗑️ 删除</button>
             </div>
           </div>
+          <span v-if="s.is_pinned === 1" class="pin-badge">📌</span>
         </div>
-        <p v-if="!sessions.length" class="muted">暂无会话，先新建一个吧。</p>
+        <p v-if="!sessions.length" class="empty-hint">暂无会话</p>
       </div>
     </aside>
 
-    <main class="main">
-      <header class="topbar">
-        <div class="mode-switch">
-          <button :class="['chip', mode === 'chat' && 'active']" @click="mode = 'chat'">对话</button>
-          <button :class="['chip', mode === 'image' && 'active']" @click="mode = 'image'">生成图片</button>
+    <!-- 主聊天区域 -->
+    <main class="chat-main">
+      <!-- 顶部工具栏 -->
+      <header class="chat-header">
+        <div class="mode-tabs">
+          <button :class="['tab', { active: mode === 'chat' }]" @click="mode = 'chat'; newConversation('chat')">
+            💬 对话
+          </button>
+          <button :class="['tab', { active: mode === 'image' }]" @click="mode = 'image'; newConversation('image')">
+            🎨 生图
+          </button>
         </div>
-        <div class="model-select" v-if="mode === 'chat'">
-          <label>模型</label>
-          <select v-model="textModel">
-            <option value="qwen-turbo">qwen-turbo</option>
-            <option value="qwen-plus">qwen-plus</option>
-          </select>
-        </div>
-        <div class="model-select" v-else>
-          <label>模型</label>
-          <select v-model="imageModel">
-            <option value="qwen-image-plus">qwen-image-plus</option>
-            <option value="qwen-image">qwen-image</option>
-          </select>
-          <label>尺寸</label>
-          <select v-model="imageSize">
-            <option value="1328*1328">1328 × 1328 (默认)</option>
-            <option value="1664*928">1664 × 928 (16:9)</option>
-            <option value="1472*1140">1472 × 1140 (4:3)</option>
-            <option value="1140*1472">1140 × 1472 (3:4)</option>
-            <option value="928*1664">928 × 1664 (9:16)</option>
-          </select>
+        <div class="model-selector">
+          <template v-if="mode === 'chat'">
+            <select v-model="textModel">
+              <option value="qwen-turbo">Qwen Turbo</option>
+              <option value="qwen-plus">Qwen Plus</option>
+            </select>
+          </template>
+          <template v-else>
+            <select v-model="imageModel">
+              <option value="qwen-image-plus">Qwen Image Plus</option>
+              <option value="qwen-image">Qwen Image</option>
+            </select>
+            <select v-model="imageSize">
+              <option value="1328*1328">1:1</option>
+              <option value="1664*928">16:9</option>
+              <option value="928*1664">9:16</option>
+            </select>
+          </template>
         </div>
       </header>
 
-      <section class="conversation" :class="{ hasMessages: formattedMessages.length > 0 }">
-        <div class="history" :class="{ emptyState: !formattedMessages.length }">
-          <div
-            v-for="msg in formattedMessages"
-            :key="msg.id"
-            :class="['bubble', msg.role === 'assistant' ? 'assistant' : 'user']"
-          >
-            <div class="bubble-head">{{ msg.role === "assistant" ? "AI" : "我" }}</div>
-            <div class="bubble-body">
-              <template v-if="msg.message_type === 'image'">
-                <div class="image-grid">
-                  <img v-for="url in msg.content.split('\n')" :key="url" :src="url" alt="AI 图" />
+      <!-- 消息区域 -->
+      <div class="messages-wrapper" ref="messagesContainer">
+        <div class="messages-container">
+          <!-- 空状态 -->
+          <div v-if="!formattedMessages.length" class="empty-state">
+            <div class="logo-icon">✨</div>
+            <h2>有什么可以帮你的？</h2>
+            <p>开始一段新对话，或者让我为你生成一张图片</p>
+            <div class="quick-actions">
+              <button class="quick-btn" @click="chatInput = '给我讲个故事'; sendMessage()">📖 讲个故事</button>
+              <button class="quick-btn" @click="chatInput = '今天天气怎么样'; sendMessage()">🌤️ 聊聊天气</button>
+              <button class="quick-btn" @click="mode = 'image'; imageInput = '一只可爱的猫咪'; sendMessage()">🐱 画只猫咪</button>
+            </div>
+          </div>
+
+          <!-- 消息列表 -->
+          <template v-else>
+            <div
+              v-for="msg in formattedMessages"
+              :key="msg.id"
+              :class="['message', msg.role]"
+            >
+              <div class="avatar">
+                {{ msg.role === 'assistant' ? '🤖' : '👤' }}
+              </div>
+              <div class="message-content">
+                <div class="message-header">
+                  <span class="role-name">{{ msg.role === 'assistant' ? 'AI 助手' : '你' }}</span>
                 </div>
-              </template>
-              <p v-else>{{ msg.content }}</p>
+                <div class="message-body">
+                  <template v-if="msg.message_type === 'image'">
+                    <div class="image-grid">
+                      <img v-for="url in msg.content.split('\n')" :key="url" :src="url" alt="生成的图片" />
+                    </div>
+                  </template>
+                  <p v-else>{{ msg.content }}</p>
+                </div>
+              </div>
             </div>
-          </div>
-          <div v-if="!formattedMessages.length" class="empty">
-            <h2>有什么可以帮忙的？</h2>
-            <p class="muted">输入问题开始对话，或切换到“生成图片”创作一张图。</p>
-          </div>
-        </div>
+          </template>
 
-        <div class="input-bar">
-          <div class="input-wrap">
-            <textarea
-              v-if="mode === 'chat'"
-              v-model="chatInput"
-              rows="2"
-              placeholder="输入你的问题..."
-              @keydown.enter.prevent="sendMessage"
-            ></textarea>
-            <textarea
-              v-else
-              v-model="imageInput"
-              rows="2"
-              placeholder="描述你想要的画面..."
-              @keydown.enter.prevent="sendMessage"
-            ></textarea>
-            <div class="input-actions">
-              <button class="btn send" :disabled="chatLoading || imageLoading" @click="sendMessage">
-                {{ chatLoading || imageLoading ? "处理中..." : "发送" }}
-              </button>
+          <!-- 加载状态 -->
+          <div v-if="chatLoading || imageLoading" class="message assistant loading">
+            <div class="avatar">🤖</div>
+            <div class="message-content">
+              <div class="typing-indicator">
+                <span></span><span></span><span></span>
+              </div>
             </div>
           </div>
         </div>
-      </section>
+      </div>
 
-      <p v-if="error" class="error">请求失败：{{ error }}</p>
+      <!-- 底部输入区 -->
+      <div class="input-area">
+        <div class="input-container">
+          <textarea
+            v-if="mode === 'chat'"
+            v-model="chatInput"
+            placeholder="输入消息..."
+            rows="1"
+            @keydown="handleKeydown"
+            @input="(e: Event) => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 200) + 'px'; }"
+          ></textarea>
+          <textarea
+            v-else
+            v-model="imageInput"
+            placeholder="描述你想要的图片..."
+            rows="1"
+            @keydown="handleKeydown"
+            @input="(e: Event) => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 200) + 'px'; }"
+          ></textarea>
+          <button
+            class="send-btn"
+            :disabled="chatLoading || imageLoading || !(mode === 'chat' ? chatInput.trim() : imageInput.trim())"
+            @click="sendMessage"
+          >
+            <span v-if="chatLoading || imageLoading" class="spinner"></span>
+            <span v-else>↑</span>
+          </button>
+        </div>
+        <p v-if="error" class="error-msg">{{ error }}</p>
+        <p class="disclaimer">AI 生成内容仅供参考</p>
+      </div>
     </main>
   </div>
 </template>
 
 <style scoped>
-.layout {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  min-height: calc(100vh - 140px);
-  gap: 16px;
-  padding: 16px 18px;
-  color: var(--text-main);
-  width: 100%;
-  max-width: 1400px;
-  margin: 0 auto;
+.ai-container {
+  display: flex;
+  height: calc(100vh - 60px);
+  overflow: hidden;
 }
+
+/* 侧边栏 */
 .sidebar {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 18px;
-  padding: 14px;
+  width: 260px;
+  background: rgba(255, 255, 255, 0.85);
+  border-right: 1px solid var(--card-border);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  box-shadow: var(--card-shadow);
+  transition: width 0.3s ease;
 }
+
+.sidebar.collapsed {
+  width: 60px;
+}
+
 .sidebar-header {
+  padding: 12px;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  border-bottom: 1px solid var(--card-border);
 }
-.logo {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--btn-text);
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-}
-.pill {
-  border: 1px solid var(--card-border);
-  border-radius: 999px;
-  background: #fff8fb;
-  padding: 9px 12px;
-  cursor: pointer;
+
+.new-chat-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--card-border);
+  border-radius: 12px;
+  background: transparent;
   color: var(--text-main);
-  transition: 0.2s ease;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
 }
-.pill:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(235, 64, 120, 0.12);
+
+.new-chat-btn:hover {
+  background: #fff0f6;
+  border-color: #ff9acb;
 }
-.pill.ghost {
-  background: #fff;
+
+.sidebar.collapsed .new-chat-btn .text {
+  display: none;
 }
+
+.collapse-btn {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 8px;
 }
+
 .session-item {
-  border: 1px solid var(--card-border);
-  border-radius: 14px;
-  padding: 10px;
-  background: #fff;
-  cursor: pointer;
-  transition: 0.2s ease;
-}
-.session-item:hover {
-  border-color: #ff9acb;
-  box-shadow: 0 10px 24px rgba(235, 64, 120, 0.12);
-}
-.session-item.active {
-  border-color: #ff9acb;
-  box-shadow: 0 10px 24px rgba(235, 64, 120, 0.16);
-}
-.session-item .title {
-  margin: 0;
-  font-weight: 600;
-  color: var(--text-main);
-}
-.session-item .meta {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.meta .tag {
-  margin-left: 6px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: #ffe3ef;
-  color: #7a103d;
-}
-.session-actions {
-  position: relative;
-  margin-top: 6px;
-  display: flex;
-  justify-content: flex-end;
-}
-.dots {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 16px;
-  padding: 2px 6px;
-}
-.dots:hover {
-  color: var(--text-main);
-}
-.menu {
-  position: absolute;
-  right: 0;
-  top: 24px;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 10px;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 120px;
-  z-index: 5;
-  box-shadow: var(--card-shadow);
-}
-.menu button {
-  background: transparent;
-  border: none;
-  color: var(--text-main);
-  text-align: left;
-  padding: 6px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.menu button:hover {
-  background: #fff4f9;
-}
-.menu .danger {
-  color: #fca5a5;
-}
-.main {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 18px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-height: calc(100vh - 180px);
-  box-shadow: var(--card-shadow);
-}
-.topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-}
-.mode-switch {
-  display: flex;
-  gap: 8px;
-}
-.topbar .chip {
-  border: 1px solid var(--card-border);
-  border-radius: 999px;
-  background: #fff8fb;
-  padding: 8px 12px;
-  color: var(--text-main);
-  cursor: pointer;
-  font-weight: 600;
-  transition: 0.2s ease;
-}
-.topbar .chip.active {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--btn-text);
-  box-shadow: 0 10px 24px rgba(235, 64, 120, 0.16);
-}
-.model-select {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.model-select label {
-  color: var(--text-muted);
-  font-size: 13px;
-}
-.model-select select {
-  background: #fff;
-  border: 1px solid var(--card-border);
-  border-radius: 10px;
-  padding: 8px 10px;
-  color: var(--text-main);
-}
-.conversation {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: center;
-}
-.conversation.hasMessages {
-  padding-top: 24px;
-}
-.history {
-  border: 1px solid var(--card-border);
-  border-radius: 16px;
+  gap: 10px;
   padding: 12px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background: #fff;
-  max-width: 920px;
-  width: 100%;
-  max-height: 70vh;
-  justify-content: flex-start;
-  box-shadow: var(--card-shadow);
-}
-.history.emptyState {
-  justify-content: center;
-  min-height: 320px;
-  padding-top: 0;
-}
-.bubble {
-  border: 1px solid var(--card-border);
-  border-radius: 14px;
-  padding: 10px;
-  background: #fff8fb;
-}
-.bubble.assistant {
-  background: linear-gradient(135deg, #fff2f8, #fef6ff);
-}
-.bubble-head {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-.bubble-body p {
-  margin: 0;
-  color: var(--text-main);
-}
-.empty {
-  text-align: center;
-  color: var(--text-main);
-  margin-top: 0;
-}
-.input-bar {
-  border: 1px solid var(--card-border);
-  border-radius: 18px;
-  padding: 10px;
-  background: #fff;
-  max-width: 820px;
-  margin: 14px auto 0;
-  width: 100%;
-  box-shadow: var(--card-shadow);
-}
-.input-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: stretch;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
   position: relative;
 }
-.input-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-}
-.input-actions .btn.send {
-  align-self: flex-end;
-}
-textarea {
-  border: 1px solid #ffcfe3;
-  border-radius: 12px;
-  padding: 10px;
-  resize: none;
-  color: var(--text-main);
+
+.session-item:hover {
   background: #fff0f6;
 }
-.btn {
-  border: 1px solid var(--card-border);
-  border-radius: 999px;
-  padding: 10px 16px;
+
+.session-item.active {
+  background: linear-gradient(135deg, #fff0f6, #ffe9f1);
+}
+
+.session-icon {
+  font-size: 16px;
+}
+
+.session-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-title {
+  display: block;
+  font-size: 14px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-actions {
+  position: relative;
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
   cursor: pointer;
-  background: #fff;
-  color: var(--text-main);
-  transition: 0.2s ease;
-  font-weight: 600;
-}
-.btn.plain {
-  background: #fff;
-  color: var(--text-main);
-}
-.btn.send {
-  background: var(--accent);
-  color: var(--btn-text);
-  border-color: transparent;
-  box-shadow: 0 10px 24px rgba(235, 64, 120, 0.14);
-}
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.image-grid {
-  margin-top: 8px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 8px;
-}
-.image-grid img {
-  width: 100%;
-  border-radius: 10px;
-  border: 1px solid var(--card-border);
-  object-fit: cover;
-}
-.muted {
+  border-radius: 6px;
   color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.session-item:hover .action-btn {
+  opacity: 1;
+}
+
+.dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: white;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  padding: 4px;
+  min-width: 120px;
+  box-shadow: var(--card-shadow);
+  z-index: 100;
+}
+
+.dropdown-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
   font-size: 13px;
 }
-.error {
-  color: #fca5a5;
+
+.dropdown-menu button:hover {
+  background: #fff0f6;
 }
-@media (max-width: 1080px) {
-  .layout {
-    grid-template-columns: 1fr;
-    min-height: auto;
-  }
+
+.dropdown-menu .danger {
+  color: #dc2626;
+}
+
+.pin-badge {
+  font-size: 12px;
+}
+
+.empty-hint {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 20px;
+}
+
+/* 主聊天区 */
+.chat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-header {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--card-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  background: #fff0f6;
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.tab {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: all 0.2s;
+}
+
+.tab.active {
+  background: white;
+  color: var(--text-main);
+  box-shadow: 0 2px 8px rgba(235, 64, 120, 0.1);
+}
+
+.model-selector {
+  display: flex;
+  gap: 8px;
+}
+
+.model-selector select {
+  padding: 8px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: white;
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+/* 消息区域 */
+.messages-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.messages-container {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+/* 空状态 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 400px;
+  text-align: center;
+  padding: 40px;
+}
+
+.logo-icon {
+  font-size: 48px;
+  margin-bottom: 20px;
+}
+
+.empty-state h2 {
+  font-size: 24px;
+  color: var(--text-main);
+  margin: 0 0 8px;
+}
+
+.empty-state p {
+  color: var(--text-muted);
+  margin: 0 0 30px;
+}
+
+.quick-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.quick-btn {
+  padding: 12px 20px;
+  border: 1px solid var(--card-border);
+  border-radius: 20px;
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-main);
+  transition: all 0.2s;
+}
+
+.quick-btn:hover {
+  background: #fff0f6;
+  border-color: #ff9acb;
+  transform: translateY(-2px);
+}
+
+/* 消息样式 */
+.message {
+  display: flex;
+  gap: 16px;
+  padding: 24px 0;
+  border-bottom: 1px solid rgba(255, 214, 232, 0.5);
+}
+
+.message:last-child {
+  border-bottom: none;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.message.user .avatar {
+  background: linear-gradient(135deg, #ff9acb, #ffd6e8);
+}
+
+.message.assistant .avatar {
+  background: linear-gradient(135deg, #ffe9f1, #fff6fb);
+  border: 1px solid var(--card-border);
+}
+
+.message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-header {
+  margin-bottom: 6px;
+}
+
+.role-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+.message-body p {
+  margin: 0;
+  line-height: 1.7;
+  color: var(--text-main);
+  white-space: pre-wrap;
+}
+
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.image-grid img {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+}
+
+/* 加载动画 */
+.typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.typing-indicator span {
+  width: 8px;
+  height: 8px;
+  background: #ff9acb;
+  border-radius: 50%;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1); }
+}
+
+/* 输入区域 */
+.input-area {
+  padding: 16px 20px 20px;
+  background: linear-gradient(to top, rgba(255, 246, 251, 0.95), transparent);
+}
+
+.input-container {
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border: 1px solid var(--card-border);
+  border-radius: 24px;
+  box-shadow: 0 4px 20px rgba(235, 64, 120, 0.08);
+}
+
+.input-container textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-main);
+  background: transparent;
+  max-height: 200px;
+  padding: 4px 0;
+}
+
+.input-container textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.send-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff9acb, #ffd6e8);
+  color: var(--btn-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: bold;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(235, 64, 120, 0.3);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-top-color: var(--btn-text);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.error-msg {
+  max-width: 800px;
+  margin: 8px auto 0;
+  color: #dc2626;
+  font-size: 13px;
+  text-align: center;
+}
+
+.disclaimer {
+  max-width: 800px;
+  margin: 8px auto 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
   .sidebar {
-    order: 2;
+    position: fixed;
+    left: 0;
+    top: 60px;
+    height: calc(100vh - 60px);
+    z-index: 100;
+    transform: translateX(-100%);
   }
-  .main {
-    order: 1;
+
+  .sidebar:not(.collapsed) {
+    transform: translateX(0);
+  }
+
+  .chat-main {
+    width: 100%;
+  }
+
+  .mode-tabs {
+    display: none;
+  }
+
+  .quick-actions {
+    flex-direction: column;
   }
 }
 </style>

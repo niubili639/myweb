@@ -71,3 +71,10 @@ docker compose up -d
 
 - 已预留 `modules/auth|spaces|couples|media` 目录及路由占位，可逐步填充。
 - Alembic 已初始化并提供 `simple_kv` 示例迁移，可继续追加迁移。
+
+### Windows 一键启动脚本
+在仓库根目录运行 `ops\start-dev.bat`，会自动弹出两个终端窗口：
+- FastAPI 后端：缺少虚拟环境会自动创建 `.venv`，缺 `.env` 会从 `.env.example` 复制，随后安装依赖并运行 `uvicorn app.main:app --reload`
+- Vite 前端：缺 `node_modules` 自动执行 `npm install`，随后运行 `npm run dev -- --host`
+
+默认访问：后端 `http://localhost:8000` ，前端 `http://localhost:5173`
