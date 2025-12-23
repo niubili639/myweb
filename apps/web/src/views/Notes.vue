@@ -1,11 +1,34 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
+import { onMounted, ref, computed, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { fetchMyCouple, addNote, listNotes, updateNote, deleteNote, type Note } from "@/api/couples";
-import { uploadImage } from "@/api/imageHost";
 
-const coupleId = ref<number | null>(null);
+// 空间类型定义
+type SpaceType = "couple" | "family" | "friends";
+
+interface SpaceConfig {
+  key: SpaceType;
+  label: string;
+  icon: string;
+  color: string;
+}
+
+const spaceConfigs: SpaceConfig[] = [
+  { key: "couple", label: "情侣空间", icon: "💕", color: "#ff9acb" },
+  { key: "family", label: "家人空间", icon: "🏠", color: "#60a5fa" },
+  { key: "friends", label: "朋友空间", icon: "👫", color: "#34d399" },
+];
+
+const route = useRoute();
+const router = useRouter();
+
+// 当前空间类型
+const currentSpace = ref<SpaceType>("couple");
+
+// 数据
+const spaceId = ref<number | null>(null);
 const notes = ref<Note[]>([]);
 const noteForm = ref({ title: "", content_md: "" });
 const error = ref("");
@@ -13,66 +36,67 @@ const uploading = ref(false);
 const uploadStatus = ref("");
 const selectedId = ref<number | null>(null);
 const editing = ref(false);
+const loading = ref(false);
 
-const renderMarkdown = (md: string) => DOMPurify.sanitize(marked.parse(md || ""));
+const currentSpaceConfig = computed(() => 
+  spaceConfigs.find(s => s.key === currentSpace.value) || spaceConfigs[0]
+);
+
+const renderMarkdown = (md: string) => DOMPurify.sanitize(marked.parse(md || "") as string);
 const previewHtml = computed(() => renderMarkdown(noteForm.value.content_md));
 
-const loadData = async () => {
+// 切换空间
+const switchSpace = (space: SpaceType) => {
+  router.push(`/notes/${space}`);
+};
+
+// 加载空间数据
+const loadSpaceData = async () => {
+  loading.value = true;
+  error.value = "";
+  spaceId.value = null;
+  notes.value = [];
+  selectedId.value = null;
+  noteForm.value = { title: "", content_md: "" };
+
   try {
-    const couple = await fetchMyCouple();
-    coupleId.value = couple?.id ?? null;
-    if (coupleId.value) {
-      notes.value = await listNotes(coupleId.value);
-      if (!selectedId.value && notes.value.length) {
-        selectedId.value = notes.value[0].id;
-        editing.value = false;
-        noteForm.value = { title: notes.value[0].title, content_md: notes.value[0].content_md };
+    if (currentSpace.value === "couple") {
+      const couple = await fetchMyCouple();
+      spaceId.value = couple?.id ?? null;
+      if (spaceId.value) {
+        notes.value = await listNotes(spaceId.value);
+        if (notes.value.length) {
+          selectedId.value = notes.value[0].id;
+          editing.value = false;
+          noteForm.value = { title: notes.value[0].title, content_md: notes.value[0].content_md };
+        }
       }
+    } else {
+      // 其他空间类型暂未实现，显示提示
+      error.value = `${currentSpaceConfig.value.label}功能即将上线，敬请期待！`;
     }
   } catch (err) {
     error.value = (err as Error).message;
+  } finally {
+    loading.value = false;
   }
 };
 
 const submitNote = async () => {
-  if (!coupleId.value) return;
+  if (!spaceId.value) return;
   if (!noteForm.value.title || !noteForm.value.content_md) return;
   try {
     if (editing.value && selectedId.value) {
-      await updateNote(coupleId.value, selectedId.value, { ...noteForm.value });
+      await updateNote(spaceId.value, selectedId.value, { ...noteForm.value });
     } else {
-      const newNote = await addNote(coupleId.value, { ...noteForm.value });
+      const newNote = await addNote(spaceId.value, { ...noteForm.value });
       selectedId.value = newNote.id;
     }
     noteForm.value = { title: "", content_md: "" };
     editing.value = false;
-    notes.value = await listNotes(coupleId.value);
+    notes.value = await listNotes(spaceId.value);
   } catch (err) {
     error.value = (err as Error).message;
-  }
-};
-
-const handleUpload = async (event: Event) => {
-  const files = (event.target as HTMLInputElement).files;
-  if (!files?.length) return;
-  const file = files[0];
-  uploading.value = true;
-  uploadStatus.value = "上传中...";
-  try {
-    const resp = await uploadImage(file);
-    const url: string | undefined =
-      resp?.data?.links?.url || resp?.data?.links?.markdown || resp?.data?.links?.markdown_with_link;
-    if (url) {
-      noteForm.value.content_md = `${noteForm.value.content_md}\n\n![](${url})`;
-      uploadStatus.value = "上传成功，已插入链接";
-    } else {
-      uploadStatus.value = "上传成功，但未获取到链接";
-    }
-  } catch (err) {
-    uploadStatus.value = (err as Error).message || "上传失败";
-  } finally {
-    uploading.value = false;
-    (event.target as HTMLInputElement).value = "";
   }
 };
 
@@ -89,10 +113,10 @@ const openNote = (n: Note) => {
 };
 
 const removeNote = async (noteId: number) => {
-  if (!coupleId.value) return;
+  if (!spaceId.value) return;
   try {
-    await deleteNote(coupleId.value, noteId);
-    notes.value = await listNotes(coupleId.value);
+    await deleteNote(spaceId.value, noteId);
+    notes.value = await listNotes(spaceId.value);
     if (selectedId.value === noteId) {
       if (notes.value.length) {
         selectedId.value = notes.value[0].id;
@@ -109,15 +133,70 @@ const removeNote = async (noteId: number) => {
   }
 };
 
-onMounted(loadData);
+// 监听路由参数变化
+watch(
+  () => route.params.spaceType,
+  (newType) => {
+    const type = (newType as SpaceType) || "couple";
+    if (spaceConfigs.some(s => s.key === type)) {
+      currentSpace.value = type;
+      loadSpaceData();
+    } else {
+      router.replace("/notes/couple");
+    }
+  },
+  { immediate: true }
+);
+
+onMounted(() => {
+  // 如果没有空间类型参数，默认跳转到 couple
+  if (!route.params.spaceType) {
+    router.replace("/notes/couple");
+  }
+});
 </script>
 
 <template>
   <div class="page">
-    <div class="layout">
+    <!-- 空间切换 Tab -->
+    <div class="space-tabs">
+      <button
+        v-for="space in spaceConfigs"
+        :key="space.key"
+        :class="['space-tab', { active: currentSpace === space.key }]"
+        :style="currentSpace === space.key ? { '--tab-color': space.color } : {}"
+        @click="switchSpace(space.key)"
+      >
+        <span class="tab-icon">{{ space.icon }}</span>
+        <span class="tab-label">{{ space.label }}</span>
+      </button>
+    </div>
+
+    <!-- 当前空间标题 -->
+    <div class="space-header">
+      <span class="space-icon">{{ currentSpaceConfig.icon }}</span>
+      <h2>{{ currentSpaceConfig.label }}的记录</h2>
+    </div>
+
+    <!-- 加载状态 -->
+    <div v-if="loading" class="loading-state">
+      <span class="spinner"></span>
+      <p>加载中...</p>
+    </div>
+
+    <!-- 空间未开通提示 -->
+    <div v-else-if="currentSpace !== 'couple'" class="coming-soon">
+      <span class="big-icon">{{ currentSpaceConfig.icon }}</span>
+      <h3>{{ currentSpaceConfig.label }}功能即将上线</h3>
+      <p class="muted">敬请期待，我们正在努力开发中...</p>
+      <button class="btn ghost" @click="switchSpace('couple')">返回情侣空间</button>
+    </div>
+
+    <!-- 主内容区 -->
+    <div v-else class="layout">
       <aside class="sidebar">
         <button class="btn primary full" @click="startNewNote">
-          新建点滴
+          ✏️ 新建记录
         </button>
         <div class="note-list">
           <div
@@ -134,6 +213,8 @@ onMounted(loadData);
               <button class="btn danger tiny" @click.stop="removeNote(n.id)">删除</button>
             </div>
           </div>
+          <p v-if="!notes.length && spaceId" class="empty-hint">还没有记录，写一篇吧 ✨</p>
+          <p v-if="!spaceId" class="empty-hint">请先在「{{ currentSpaceConfig.label }}」创建空间信息</p>
         </div>
       </aside>
 
@@ -160,50 +241,163 @@ onMounted(loadData);
               <textarea
                 v-model="noteForm.content_md"
                 rows="10"
-                placeholder="使用 Markdown 写下想说的话，或粘贴上传的图片链接"
+                placeholder="使用 Markdown 写下想说的话..."
               ></textarea>
-              <button class="btn primary" @click="submitNote" :disabled="!coupleId">保存</button>
-              <p class="muted" v-if="!coupleId">请先在「情侣空间」创建情侣信息</p>
+              <button class="btn primary" @click="submitNote" :disabled="!spaceId">保存</button>
             </div>
             <div class="preview">
               <p class="muted">实时预览</p>
               <div class="note-body" v-html="previewHtml"></div>
             </div>
           </div>
-          <p v-if="!notes.length" class="muted center">还没有记录，写一篇吧。</p>
         </template>
       </main>
     </div>
 
-    <p v-if="error" class="error">请求失败：{{ error }}</p>
+    <p v-if="error && currentSpace === 'couple'" class="error">请求失败：{{ error }}</p>
   </div>
 </template>
 
 <style scoped>
 .page {
-  padding: 32px 16px 60px;
+  padding: 24px 20px 60px;
   max-width: 1100px;
   margin: 0 auto;
-  color: #111827;
+  color: var(--text-main);
 }
+
+/* 空间切换 Tab */
+.space-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 6px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  width: fit-content;
+}
+
+.space-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+}
+
+.space-tab:hover {
+  background: #fff0f6;
+}
+
+.space-tab.active {
+  background: linear-gradient(135deg, var(--tab-color, #ff9acb), rgba(255, 214, 232, 0.8));
+  color: #5b0f2c;
+  box-shadow: 0 4px 12px rgba(235, 64, 120, 0.15);
+}
+
+.tab-icon {
+  font-size: 18px;
+}
+
+.tab-label {
+  font-size: 14px;
+}
+
+/* 空间标题 */
+.space-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.space-icon {
+  font-size: 28px;
+}
+
+.space-header h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+/* 加载状态 */
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+  color: var(--text-muted);
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--card-border);
+  border-top-color: #ff9acb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 即将上线 */
+.coming-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  text-align: center;
+}
+
+.big-icon {
+  font-size: 64px;
+  margin-bottom: 20px;
+}
+
+.coming-soon h3 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  color: var(--text-main);
+}
+
+.coming-soon .muted {
+  margin: 0 0 24px;
+}
+
+/* 主布局 */
 .layout {
   display: grid;
   grid-template-columns: 260px 1fr;
-  gap: 12px;
-  height: calc(100vh - 200px);
-  align-items: stretch;
+  gap: 16px;
+  height: calc(100vh - 260px);
+  min-height: 500px;
 }
+
 .sidebar {
-  background: #ffffff;
-  border: 1px solid #ffd6e8;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 18px;
-  padding: 12px;
-  box-shadow: 0 10px 28px rgba(235, 64, 120, 0.08);
+  padding: 14px;
+  box-shadow: var(--card-shadow);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   height: 100%;
+  overflow: hidden;
 }
+
 .note-list {
   display: flex;
   flex-direction: column;
@@ -211,173 +405,256 @@ onMounted(loadData);
   overflow-y: auto;
   flex: 1;
 }
+
 .note-item {
-  padding: 10px;
+  padding: 12px;
   border-radius: 12px;
-  border: 1px solid #ffe3ef;
+  border: 1px solid var(--card-border);
   background: #fff;
   cursor: pointer;
-  transition: 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  transition: all 0.2s ease;
 }
+
+.note-item:hover {
+  border-color: #ff9acb;
+}
+
 .note-item.active {
   border-color: #ff9acb;
-  box-shadow: 0 8px 18px rgba(235, 64, 120, 0.12);
+  background: #fff8fb;
+  box-shadow: 0 4px 12px rgba(235, 64, 120, 0.1);
 }
+
 .note-item .title {
-  margin: 0;
-  font-weight: 700;
+  margin: 0 0 4px;
+  font-weight: 600;
+  font-size: 14px;
 }
+
 .note-actions {
   display: flex;
   gap: 6px;
+  margin-top: 8px;
 }
-.btn.tiny {
-  padding: 6px 10px;
-  border-radius: 10px;
-}
-.btn.danger {
-  background: linear-gradient(135deg, #fecdd3, #fda4af);
-  color: #7f1d1d;
-}
-.main {
-  min-height: 480px;
-  height: 100%;
-}
-.layout {
-  margin-top: 0;
-}
-.center {
+
+.empty-hint {
   text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 20px 10px;
 }
+
+/* 主内容区 */
+.main {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.view-card,
 .editor-card {
-  background: #ffffff;
-  border: 1px solid #ffd6e8;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 14px 34px rgba(235, 64, 120, 0.08);
-  height: 100%;
+  padding: 20px;
+  box-shadow: var(--card-shadow);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.editor-card.two-col {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  height: 100%;
-  align-items: stretch;
-}
-.view-card {
-  background: #ffffff;
-  border: 1px solid #ffd6e8;
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 14px 34px rgba(235, 64, 120, 0.08);
-  height: 100%;
-  overflow-y: auto;
-}
+
 .view-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--card-border);
+  flex-shrink: 0;
 }
-.actions {
-  display: flex;
-  gap: 8px;
+
+.view-head h3 {
+  margin: 4px 0 0;
+  font-size: 20px;
 }
+
+.view-card .note-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.editor-card.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 0;
+  gap: 12px;
+  height: 100%;
+  overflow: hidden;
 }
+
+.preview {
+  border-left: 1px solid var(--card-border);
+  padding-left: 20px;
+  overflow-y: auto;
+  height: 100%;
+}
+
 input,
 textarea {
   background: #fff0f6;
   border: 1px solid #ffcfe3;
   border-radius: 12px;
-  padding: 10px 12px;
-  color: #111827;
+  padding: 12px 14px;
+  color: var(--text-main);
+  font-size: 14px;
 }
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: #ff9acb;
+}
+
 textarea {
-  resize: vertical;
-  min-height: 0;
+  resize: none;
+  min-height: 150px;
   flex: 1;
-  height: 100%;
-  overflow: auto;
 }
+
+/* 按钮 */
 .btn {
-  border: 1px solid #ffcfe3;
-  border-radius: 999px;
-  padding: 10px 16px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  padding: 10px 18px;
   cursor: pointer;
-  background: linear-gradient(135deg, #ff9acb, #ffd6e8);
-  color: #5b0f2c;
-  transition: 0.2s ease;
-  font-weight: 700;
+  background: var(--accent);
+  color: var(--btn-text);
+  transition: all 0.2s ease;
+  font-weight: 600;
+  font-size: 14px;
 }
+
 .btn.primary {
   border-color: transparent;
 }
+
+.btn.ghost {
+  background: #fff;
+}
+
+.btn.full {
+  width: 100%;
+}
+
+.btn.tiny {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.btn.danger {
+  background: linear-gradient(135deg, #fecdd3, #fda4af);
+  color: #7f1d1d;
+}
+
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 10px 30px rgba(235, 64, 120, 0.18);
+  box-shadow: 0 6px 16px rgba(235, 64, 120, 0.15);
 }
+
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
-.notes {
-  margin-top: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.note {
-  padding: 12px;
-  border-radius: 14px;
-  background: #ffffff;
-  border: 1px solid #ffd6e8;
-  box-shadow: 0 10px 28px rgba(235, 64, 120, 0.08);
-}
-.note-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
+
+/* Markdown 内容 */
 .note-body :deep(p) {
-  margin: 6px 0;
+  margin: 8px 0;
+  line-height: 1.7;
 }
+
+.note-body :deep(h1),
+.note-body :deep(h2),
+.note-body :deep(h3) {
+  margin: 16px 0 8px;
+}
+
 .note-body :deep(pre) {
-  background: #f9fbff;
-  padding: 10px;
+  background: #f8fafc;
+  padding: 12px;
   border-radius: 8px;
-  overflow: auto;
+  overflow-x: auto;
 }
-.preview {
-  border-left: 1px solid #ffe3ef;
-  padding-left: 12px;
-  min-height: 0;
-  overflow: auto;
+
+.note-body :deep(code) {
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
 }
+
+.note-body :deep(img) {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* 辅助样式 */
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .small {
   font-size: 12px;
 }
-.muted {
-  color: #6b7280;
-  font-size: 13px;
-}
+
 .error {
-  margin-top: 8px;
-  color: #ef4444;
+  margin-top: 16px;
+  padding: 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  color: #dc2626;
+  text-align: center;
 }
+
+/* 响应式 */
 @media (max-width: 900px) {
-  .editor-card {
+  .layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .sidebar {
+    height: auto;
+    max-height: 300px;
+  }
+
+  .main {
+    min-height: 400px;
+  }
+
+  .editor-card.two-col {
     grid-template-columns: 1fr;
   }
+
   .preview {
     border-left: none;
+    border-top: 1px solid var(--card-border);
     padding-left: 0;
+    padding-top: 16px;
+    max-height: 300px;
+  }
+
+  .space-tabs {
+    width: 100%;
+    overflow-x: auto;
   }
 }
 </style>

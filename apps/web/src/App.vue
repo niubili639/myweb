@@ -2,6 +2,7 @@
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { computed } from "vue";
 import { useAuthStore } from "@/stores/auth";
+import GlobalToast from "@/components/common/GlobalToast.vue";
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -15,6 +16,7 @@ const logout = () => {
 
 <template>
   <div class="shell">
+    <GlobalToast />
     <header class="topbar">
       <div class="brand" @click="router.push('/')">
         <div class="dot"></div>

@@ -6,6 +6,7 @@ import Ai from "@/views/Ai.vue";
 import Couple from "@/views/Couple.vue";
 import Album from "@/views/Album.vue";
 import Notes from "@/views/Notes.vue";
+import Messages from "@/views/Messages.vue";
 import Settings from "@/views/Settings.vue";
 import { useAuthStore } from "@/stores/auth";
 
@@ -17,8 +18,9 @@ const router = createRouter({
     { path: "/", name: "Home", component: Home },
     { path: "/ai", name: "Ai", component: Ai },
     { path: "/couple", name: "Couple", component: Couple },
-    { path: "/album", name: "Album", component: Album },
-    { path: "/notes", name: "Notes", component: Notes },
+    { path: "/album/:spaceType?", name: "Album", component: Album },
+    { path: "/notes/:spaceType?", name: "Notes", component: Notes },
+    { path: "/messages", name: "Messages", component: Messages },
     { path: "/settings", name: "Settings", component: Settings },
   ],
 });

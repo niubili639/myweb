@@ -5,6 +5,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useAppStore } from "@/stores/app";
 import { getApiKey, setApiKey } from "@/api/auth";
 import { fetchHealth, type HealthResponse } from "@/api/health";
+import { globalToast } from "@/composables/useToast";
 import http from "@/api/http";
 
 interface UserRow {
@@ -46,10 +47,25 @@ const loadHealth = async () => {
   }
 };
 
+const amapKeyInput = ref("");
+const amapSafeKeyInput = ref("");
+
 const loadApiKey = async () => {
   try {
     const key = await getApiKey("qwen");
     apiKeyInput.value = key.key;
+  } catch {
+    /* ignore missing */
+  }
+  try {
+    const key = await getApiKey("amap_web_key");
+    amapKeyInput.value = key.key;
+  } catch {
+    /* ignore missing */
+  }
+  try {
+    const key = await getApiKey("amap_web_safe_key");
+    amapSafeKeyInput.value = key.key;
   } catch {
     /* ignore missing */
   }
@@ -60,6 +76,20 @@ const saveApiKey = async () => {
   error.value = "";
   try {
     await setApiKey({ key: apiKeyInput.value, provider: "qwen" });
+  } catch (err) {
+    error.value = (err as Error).message;
+  } finally {
+    saving.value = false;
+  }
+};
+
+const saveAmapKey = async () => {
+  saving.value = true;
+  error.value = "";
+  try {
+    await setApiKey({ key: amapKeyInput.value, provider: "amap_web_key" });
+    await setApiKey({ key: amapSafeKeyInput.value, provider: "amap_web_safe_key" });
+    globalToast.success("保存成功");
   } catch (err) {
     error.value = (err as Error).message;
   } finally {
@@ -156,6 +186,23 @@ onMounted(async () => {
           {{ saving ? "保存中..." : "保存" }}
         </button>
       </div>
+    </section>
+
+    <!-- 高德地图 Key -->
+    <section class="card">
+      <h3>🗺️ 高德地图 API（Web端）</h3>
+      <p class="hint">配置后可在情侣空间显示双方位置和距离</p>
+      <div class="input-group">
+        <label class="input-label">Web Key</label>
+        <input v-model="amapKeyInput" type="password" placeholder="高德 Web JS API Key" />
+      </div>
+      <div class="input-group">
+        <label class="input-label">安全密钥 (jscode)</label>
+        <input v-model="amapSafeKeyInput" type="password" placeholder="高德安全密钥" />
+      </div>
+      <button class="btn primary" :disabled="saving" @click="saveAmapKey">
+        {{ saving ? "保存中..." : "保存" }}
+      </button>
     </section>
 
     <!-- 用户管理 -->
@@ -286,15 +333,28 @@ onMounted(async () => {
   gap: 12px;
 }
 
+.input-group {
+  margin-bottom: 12px;
+}
+
+.input-label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
 input,
 .input {
   flex: 1;
+  width: 100%;
   background: #fff0f6;
   border: 1px solid #ffcfe3;
   border-radius: 10px;
   padding: 10px 14px;
   color: var(--text-main);
   font-size: 14px;
+  box-sizing: border-box;
 }
 
 input:focus,

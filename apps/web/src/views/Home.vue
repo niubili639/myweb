@@ -42,8 +42,8 @@ const greeting = computed(() => {
 const quickLinks = [
   { icon: "💬", title: "AI 对话", desc: "和智能助手聊天", route: "/ai" },
   { icon: "💕", title: "情侣空间", desc: "记录甜蜜时光", route: "/couple" },
-  { icon: "📸", title: "相册", desc: "珍藏美好回忆", route: "/album" },
-  { icon: "📝", title: "记录", desc: "写下心情日记", route: "/notes" },
+  { icon: "📸", title: "相册", desc: "珍藏美好回忆", route: "/album/couple" },
+  { icon: "📝", title: "记录", desc: "写下心情日记", route: "/notes/couple" },
 ];
 
 // 每日一言（可以后续接入 API）
