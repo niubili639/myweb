@@ -1,0 +1,25 @@
+:root {
+  --bg-gradient-top: #ffe9f1;
+  --bg-gradient-bottom: #fff6fb;
+  --grid-top: #ffd6e8;
+  --grid-bottom: #ffddee;
+  --card-bg: #ffffff;
+  --card-border: #ffd6e8;
+  --card-shadow: 0 14px 34px rgba(235, 64, 120, 0.08);
+  --text-main: #111827;
+  --text-muted: #4a0c26;
+  --accent: linear-gradient(135deg, #ff9acb, #ffd6e8);
+  --btn-text: #5b0f2c;
+}
+
+body {
+  background: radial-gradient(circle at 20% 20%, rgba(255, 192, 203, 0.12), transparent 35%),
+    radial-gradient(circle at 80% 0%, rgba(204, 229, 255, 0.12), transparent 35%),
+    var(--bg-gradient-bottom);
+  color: var(--text-main);
+}
+
+.muted {
+  color: var(--text-muted);
+  opacity: 1;
+}
